@@ -1,0 +1,9 @@
+[
+  {
+    "id": "logic_01",
+    "category": "Logic",
+    "prompt": "Wenn drei Handtücher 3 Stunden zum Trocknen brauchen, wie lange brauchen dann sechs Handtücher?",
+    "expected_keywords": ["3 Stunden", "drei Stunden", "gleichzeitig"],
+    "weight": 1.0
+  }
+]
