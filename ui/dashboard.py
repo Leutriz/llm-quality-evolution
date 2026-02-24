@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import yaml  # Neu: für config
 from textual.app import App, ComposeResult
 from textual.screen import Screen
@@ -14,6 +15,42 @@ from adapters.ollama import OllamaAdapter
 from core.scoring import score_response
 
 
+class DatasetScreen(Screen):
+    """Zeigt alle verfügbaren Test-Datasets an."""
+    BINDINGS = [("escape", "app.pop_screen", "Zurück")]
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with Container(id="dataset-container", classes="main-container"):
+            yield Label("VERFÜGBARE DATASETS", id="dataset-title", classes="panel-title-text")
+            yield DataTable(id="dataset-table")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        table = self.query_one("#dataset-table")
+        table.add_columns("DATEI", "PROMPTS", "VORSCHAU")
+        table.cursor_type = "row"
+        self.load_datasets()
+
+    @work(exclusive=True, thread=True)
+    def load_datasets(self):
+        table = self.query_one(DataTable)
+        dataset_dir = "datasets"
+        
+        if not os.path.exists(dataset_dir):
+            self.app.notify("Ordner /datasets nicht gefunden!", severity="error")
+            return
+
+        for file in os.listdir(dataset_dir):
+            if file.endswith(".json"):
+                try:
+                    with open(os.path.join(dataset_dir, file), "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        count = len(data)
+                        preview = data[0].get("prompt", "")[:40] + "..." if data else "Leer"
+                        table.add_row(file, str(count), preview)
+                except Exception:
+                    table.add_row(file, "Fehler", "Datei konnte nicht gelesen werden")
 
 class ModelScreen(Screen):
     """Zeigt alle lokal installierten Ollama-Modelle an."""
@@ -59,10 +96,10 @@ class ConfigScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        with Vertical(id="editor-container"):
-            yield Label("\nKONFIGURATION EDITIEREN (Strg+S zum Speichern)\n", id="editor-title")
-            yield TextArea(id="config-editor", language="yaml", show_line_numbers=True)
-            with Horizontal():
+        with Container(id="config-container", classes="main-container"):
+            yield Label("KONFIGURATION EDITIEREN", id="config-title", classes="panel-title-text")
+            yield TextArea(id="config-editor", language="yaml")
+            with Horizontal(classes="button-bar"):
                 yield Button("Speichern", variant="success", id="save-btn")
                 yield Button("Abbrechen", variant="error", id="cancel-btn")
         yield Footer()
@@ -136,15 +173,15 @@ class WelcomeScreen(Screen):
         # 1. Check Ollama
         try:
             requests.get("http://localhost:11434/api/tags", timeout=1)
-            status_lines.append("[#14baba]Ollama: Online[/]")
+            status_lines.append("Ollama: [#14baba]online[/]")
             self.ollama_online = True
         except:
-            status_lines.append("[#ff4b4b]Ollama: Offline[/]")
+            status_lines.append("Ollama: [#ff4b4b]offline[/]")
             self.ollama_online = False
 
         # 2. Check OpenAI (Beispielhaft - checkt nur ob API Key da ist oder pingt API)
         # Hier könnte man später einen echten Ping zu api.openai.com machen
-        status_lines.append("[#e89f46]OpenAI: configured[/]") 
+        status_lines.append("OpenAI: [#e89f46]configured[/]") 
 
         # Update das Label mit allen Stati
         status_label = self.query_one("#status-label")
@@ -164,7 +201,7 @@ class WelcomeScreen(Screen):
         self.app.push_screen(ModelScreen())
 
     def action_show_datasets(self):
-        self.app.notify("Dataset-Manager (Beta): Dateien in /datasets werden hier bald gelistet.")
+        self.app.push_screen(DatasetScreen())
 
 class ResultScreen(Screen):
     """Die Seite mit der Live-Tabelle."""
@@ -224,9 +261,13 @@ class EvaluationApp(App):
     .panel-title { color: #28d483; text-style: bold; margin-bottom: 1; }
     .stat-line { color: #cccccc; }
 
-    #model-container { padding: 2; background: #2d2d2d; margin: 2; border: tall #3f3f3f; }
-    #model-title { color: #28d483; text-style: bold; margin-bottom: 1; }
-    
+    .main-container { padding: 2; background: #2d2d2d; margin: 2; border: tall #3f3f3f; height: 1fr; }
+    .panel-title-text { color: #28d483; text-style: bold; margin-bottom: 1; }
+    TextArea { height: 1fr; border: solid #3f3f3f; margin-bottom: 1; }
+    .button-bar { height: 3; align: center middle; column-span: 2; }
+    #model-container, #dataset-container, #config-container { padding: 2; background: #2d2d2d; margin: 2; border: tall #3f3f3f; }
+    #model-title, #dataset-title, #config-title { color: #28d483; text-style: bold; margin-bottom: 1; }
+
     #run-info { background: $accent; color: white; padding: 1; margin-bottom: 1; }
     DataTable { height: 1fr; border: solid #3f3f3f; }
     """

@@ -1,4 +1,4 @@
-
+[
   {
     "id": "tech_01",
     "category": "Technical",
@@ -6,3 +6,4 @@
     "expected_keywords": ["def", "sort", "return"],
     "weight": 0.8
   }
+]
