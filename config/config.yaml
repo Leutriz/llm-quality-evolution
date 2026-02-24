@@ -1,9 +1,8 @@
 # LLM Quality Evolution Config
 
 app:
-  name: "LLM Quality Evolution"
-  version: "1.0.0"
-  default_threshold: 80
+  name: "LLM Quality Evolution - v1.0.0"
+  default_threshold: 85
 
 providers:
   ollama:

@@ -1,13 +1,16 @@
-from core.launcher import Launcher
+from ui.dashboard import EvaluationApp
 
 def main():
-    launcher = Launcher()
-    user_choices = launcher.run()
+    """
+    Haupteinstiegspunkt für LLM Quality Evolution v2.1.
+    Initialisiert die TUI-Anwendung und startet den Event-Loop.
+    """
+    app = EvaluationApp()
     
-    if user_choices:
-        print(f"\n✅ Setup bereit!")
-        print(f" └─ Modell: {user_choices['model']}")
-        print(f" └─ Datasets: {', '.join(user_choices['datasets'])}")
+    try:
+        app.run()
+    except Exception as e:
+        print(f"💥 Die App musste aufgrund eines Fehlers beendet werden: {e}")
 
 if __name__ == "__main__":
     main()
