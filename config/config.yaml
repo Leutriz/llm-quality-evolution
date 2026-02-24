@@ -1,0 +1,25 @@
+# LLM Quality Evolution Config
+
+app:
+  name: "LLM Quality Evolution"
+  version: "2.0.0"
+  default_threshold: 80
+
+providers:
+  ollama:
+    host: "http://localhost:11434"
+    models:
+      - name: "llama3"
+        parameters: "8B"
+        quantization: "Q4_K_M"
+        context_window: 8192
+      - name: "mistral"
+        parameters: "7B"
+        quantization: "Q4_0"
+        context_window: 32768
+
+  openai:
+    api_key: "DEIN_KEY_HIER"
+    models:
+      - name: "gpt-4o"
+        cost_per_1k_tokens: 0.01
