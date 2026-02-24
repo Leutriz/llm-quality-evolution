@@ -1,39 +1,52 @@
+import re
+
 def score_response(response: str, expected_keywords: list) -> dict:
     """
-    Bewertet eine LLM-Antwort basierend auf Keywords und Struktur.
-    Gibt ein Dict mit Einzel-Scores und dem Gesamt-Score zurück.
+    Evaluiert die Antwort des LLMs basierend auf Schlagworten.
+    Gibt IMMER ein Dictionary mit dem Key 'score' zurück.
     """
-    score = 100
-    matched_keywords = []
-    
-    # 1. Check: Leere Antwort
-    if not response or len(response.strip()) == 0:
-        return {"final_score": 0, "reason": "Empty response", "matches": []}
+    # Fallback, falls die Antwort leer oder None ist
+    if not response or not isinstance(response, str):
+        return {
+            "score": 0,
+            "matches": [],
+            "missing": expected_keywords,
+            "status": "No response provided"
+        }
 
-    # 2. Keyword Matching (Case Insensitive)
-    if expected_keywords:
-        match_count = 0
-        for kw in expected_keywords:
-            if kw.lower() in response.lower():
-                match_count += 1
-                matched_keywords.append(kw)
-        
-        # Abzug, wenn Keywords fehlen (proportional)
-        match_ratio = match_count / len(expected_keywords)
-        if match_ratio < 1.0:
-            score -= (1.0 - match_ratio) * 50  # Bis zu 50 Punkte Abzug
+    # Falls keine Keywords definiert sind, betrachten wir die Antwort als 100% 
+    # (oder man könnte 0 setzen, je nach Test-Philosophie)
+    if not expected_keywords:
+        return {
+            "score": 100,
+            "matches": [],
+            "missing": [],
+            "status": "No keywords to evaluate"
+        }
 
-    # 3. Längen-Check (Sanity Check)
-    # Zu kurz (unter 20 Zeichen) deutet oft auf Verweigerung oder Fehler hin
-    if len(response) < 20:
-        score -= 20
+    matches = []
+    missing = []
     
-    # Zu lang (über 5000 Zeichen) könnte ein Loop/Halluzination sein
-    if len(response) > 5000:
-        score -= 10
+    # Normalisierung für fairen Vergleich (Lowercase und Wortgrenzen beachten)
+    clean_response = response.lower()
+    
+    for kw in expected_keywords:
+        # Wir suchen mit RegEx nach dem Wort, um Teil-Treffer (wie 'Baum' in 'Baumhaus') zu finden
+        if re.search(rf"\b{re.escape(kw.lower())}\b", clean_response):
+            matches.append(kw)
+        else:
+            missing.append(kw)
+
+    # Score-Berechnung (Prozentualer Anteil der gefundenen Wörter)
+    match_count = len(matches)
+    total_count = len(expected_keywords)
+    
+    # Sicherstellen, dass das Ergebnis ein Integer zwischen 0 und 100 ist
+    final_score = int((match_count / total_count) * 100) if total_count > 0 else 0
 
     return {
-        "final_score": max(0, int(score)),
-        "matched_keywords": matched_keywords,
-        "length": len(response)
+        "score": final_score,
+        "matches": matches,
+        "missing": missing,
+        "status": f"Found {match_count} of {total_count} keywords"
     }

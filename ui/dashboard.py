@@ -1,19 +1,174 @@
 import asyncio
 import json
 import os
-import yaml  # Neu: für config
+import yaml
 from textual.app import App, ComposeResult
-from textual.screen import Screen
-from textual.widgets import Header, Footer, Static, Label, DataTable, TextArea, Button
-from textual.containers import Grid, Container, Vertical, Horizontal
+from textual.screen import Screen, ModalScreen
+from textual.widgets import Header, Footer, Static, Label, DataTable, TextArea, Button, SelectionList
+from textual.containers import Grid, Container, Horizontal
+from textual.widgets.selection_list import Selection
 from textual import work
 import subprocess
 import requests
 
-from core.launcher import Launcher
 from adapters.ollama import OllamaAdapter
 from core.scoring import score_response
 
+# --- 1. DETAIL MODAL (Antwort-Volltext) ---
+class DetailModal(ModalScreen):
+    def __init__(self, data):
+        super().__init__()
+        self.data = data
+
+    def compose(self) -> ComposeResult:
+        with Container(id="modal-container", classes="main-container"):
+            yield Label(f"DETAILS: {self.data['id']}", classes="panel-title-text")
+            yield Label("PROMPT:", classes="stat-line")
+            yield Static(self.data['prompt'], classes="modal-text-box")
+            yield Label("\nRESPONSE:", classes="stat-line")
+            yield TextArea(self.data['response'], read_only=True, classes="modal-text-area")
+            with Horizontal(classes="button-bar"):
+                yield Button("Schließen", variant="primary", id="close-btn")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.app.pop_screen()
+
+# --- 2. LAUNCHER SCREEN (Die Auswahl-Maske) ---
+class LauncherScreen(Screen):
+    BINDINGS = [("escape", "app.pop_screen", "Abbrechen")]
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with Container(classes="main-container"):
+            yield Label("TEST KONFIGURIEREN", classes="panel-title-text")
+            yield Label("1. Modell auswählen (Ollama):", classes="stat-line")
+            yield SelectionList(id="select-model")
+            yield Label("\n2. Datasets auswählen:", classes="stat-line")
+            yield SelectionList(id="select-datasets")
+            with Horizontal(classes="button-bar"):
+                yield Button("START", variant="success", id="start-btn")
+                yield Button("Abbrechen", variant="error", id="cancel-btn")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        m_list = self.query_one("#select-model")
+        try:
+            res = subprocess.run(['ollama', 'list'], capture_output=True, text=True)
+            for line in res.stdout.strip().split('\n')[1:]:
+                if line:
+                    name = line.split()[0]
+                    m_list.add_option(Selection(name, name))
+        except:
+            m_list.add_option(Selection("Ollama offline", "none"))
+
+        d_list = self.query_one("#select-datasets")
+        if os.path.exists("datasets"):
+            for f in os.listdir("datasets"):
+                if f.endswith(".json"):
+                    d_list.add_option(Selection(f, f))
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "start-btn":
+            selected_models = self.query_one("#select-model").selected
+            selected_datasets = self.query_one("#select-datasets").selected
+            
+            if selected_models and selected_datasets:
+                choices = {"model": selected_models[0], "datasets": selected_datasets}
+                
+                # Wir suchen den ResultScreen im Stack, um ihm die Daten zu übergeben
+                for screen in self.app.screen_stack:
+                    if isinstance(screen, ResultScreen):
+                        self.app.pop_screen() # Schließe erst den Launcher
+                        screen.start_new_run(choices) # Dann starte den Test
+                        return
+                
+                # Falls wir keinen ResultScreen finden (Sicherheitshalber)
+                self.app.notify("Konnte Result-Screen nicht finden!", severity="error")
+        else:
+            self.app.pop_screen()
+
+# --- 3. RESULT SCREEN (Das Labor-Tagebuch) ---
+class ResultScreen(Screen):
+    BINDINGS = [
+        ("r", "launch_test", "Neuer Test"),
+        ("escape", "app.pop_screen", "Zurück"),
+        ("enter", "show_details", "Details")
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self.results_data = []
+        self.eval_in_progress = False
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with Container(classes="main-container"):
+            yield Label("TEST ERGEBNISSE", id="run-title", classes="panel-title-text")
+            yield DataTable(id="results-table")
+            yield Label("", id="run-status-hint")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        table = self.query_one(DataTable)
+        table.add_columns("ID", "Score", "TPS", "Latency", "Status")
+        table.cursor_type = "row"
+
+    def action_launch_test(self):
+        if not self.eval_in_progress:
+            self.app.push_screen(LauncherScreen())
+        else:
+            self.app.notify("Laufender Test!", severity="warning")
+
+    def start_new_run(self, choices):
+        self.eval_in_progress = True
+        self.choices = choices
+        self.results_data = [] # Wichtig: Alte Daten löschen
+        
+        table = self.query_one(DataTable)
+        table.clear() # Wichtig: Tabelle leeren
+        
+        # Titel und Status aktualisieren
+        self.query_one("#run-title").update(f"RUNNING: [bold cyan]{choices['model']}[/]")
+        self.query_one("#run-status-hint").update("[blink]⚙️ - Test läuft aktiv...[/]")
+        
+        self.run_evaluation()
+
+    @work(exclusive=True, thread=True)
+    def run_evaluation(self):
+        table = self.query_one(DataTable)
+        adapter = OllamaAdapter(self.choices['model'])
+        
+        for ds_name in self.choices['datasets']:
+            with open(f"datasets/{ds_name}", "r", encoding="utf-8") as f:
+                dataset = json.load(f)
+            
+            for item in dataset:
+                res = adapter.send(item['prompt'])
+                eval_data = score_response(res.get("response", ""), item.get("expected_keywords", []))
+                score = eval_data.get('score', 0)
+                metrics = res.get("metrics", {})
+
+                self.results_data.append({
+                    "id": item['id'], "prompt": item['prompt'], 
+                    "response": res.get("response", ""), "score": score
+                })
+
+                row_data = (item['id'], f"{score}%", str(metrics.get("tps", 0)), 
+                            f"{metrics.get('duration', 0)}s", "✅" if score >= 80 else "⚠️")
+                
+                self.app.call_from_thread(lambda d=row_data: table.add_row(*d))
+        
+        self.app.call_from_thread(self.finalize_ui)
+
+    def finalize_ui(self):
+        self.eval_in_progress = False
+        self.query_one("#run-title").update(f"COMPLETED: [bold green]{self.choices['model']}[/]")
+        self.query_one("#run-status-hint").update("✅ Run beendet. Drücke [b]R[/] für neuen Test.")
+
+    def action_show_details(self):
+        idx = self.query_one(DataTable).cursor_row
+        if idx is not None and idx < len(self.results_data):
+            self.app.push_screen(DetailModal(self.results_data[idx]))
 
 class DatasetScreen(Screen):
     """Zeigt alle verfügbaren Test-Datasets an."""
@@ -88,8 +243,6 @@ class ModelScreen(Screen):
             self.app.notify(f"Fehler beim Laden der Modelle: {e}", severity="error")
 
 
-# --- NEUER SCREEN: CONFIG EDITOR ---
-
 class ConfigScreen(Screen):
     """Ein einfacher YAML-Editor für die config.yaml."""
     BINDINGS = [("escape", "app.pop_screen", "Abbrechen"), ("ctrl+s", "save_config", "Speichern")]
@@ -131,12 +284,11 @@ class ConfigScreen(Screen):
         else:
             self.app.pop_screen()
 
-# --- UPDATE WELCOME SCREEN ---
 
 class WelcomeScreen(Screen):
     """Das Claude-Style Startmenü."""
     BINDINGS = [
-        ("r", "new_test", "Run Test"),
+        ("t", "show_tests", "Tests"),
         ("m", "show_models", "Models"),
         ("d", "show_datasets", "Datasets"),
         ("c", "open_config", "Config"),
@@ -187,12 +339,8 @@ class WelcomeScreen(Screen):
         status_label = self.query_one("#status-label")
         status_label.update("\n".join(status_lines))
 
-    async def action_new_test(self):
-        launcher = Launcher()
-        with self.app.suspend():
-            choices = await asyncio.to_thread(launcher.run)
-        if choices:
-            self.app.push_screen(ResultScreen(choices))
+    async def action_show_tests(self):
+        self.app.push_screen(ResultScreen())
 
     def action_open_config(self):
         self.app.push_screen(ConfigScreen())
@@ -202,90 +350,6 @@ class WelcomeScreen(Screen):
 
     def action_show_datasets(self):
         self.app.push_screen(DatasetScreen())
-
-class ResultScreen(Screen):
-    """Die Seite mit der Live-Tabelle im einheitlichen Design."""
-    BINDINGS = [
-        ("escape", "app.pop_screen", "Zurück"),
-        ("s", "save_report", "Report speichern")
-    ]
-
-    def __init__(self, choices):
-        super().__init__()
-        self.choices = choices
-        self.results_data = []
-
-    def compose(self) -> ComposeResult:
-        yield Header()
-        with Container(classes="main-container"):
-            yield Label(f"RUNNING EVALUATION: {self.choices['model']}", classes="panel-title-text")
-            yield DataTable(id="results-table")
-            yield Static("Drücke [b]Enter[/b] auf einer Zeile für Details", id="hint-text")
-        yield Footer()
-
-    def on_mount(self) -> None:
-        table = self.query_one(DataTable)
-        table.add_columns("ID", "Score", "TPS", "Latency", "Status")
-        table.cursor_type = "row"
-        self.run_evaluation()
-
-    @work(exclusive=True, thread=True)
-    def run_evaluation(self):
-        table = self.query_one(DataTable)
-        adapter = OllamaAdapter(self.choices['model'])
-        
-        for ds_name in self.choices['datasets']:
-            with open(f"datasets/{ds_name}", "r", encoding="utf-8") as f:
-                dataset = json.load(f)
-            
-            for item in dataset:
-                row_key = table.add_row(item['id'], "...", "...", "...", "⏳")
-                result = adapter.send(item['prompt'])
-                eval_data = score_response(result.get("response", ""), item.get("expected_keywords", []))
-                metrics = result.get("metrics", {})
-
-                # Daten für Detail-View speichern
-                self.results_data.append({
-                    "id": item['id'],
-                    "prompt": item['prompt'],
-                    "response": result.get("response", ""),
-                    "score": eval_data['score']
-                })
-
-                table.update_cell(row_key, "Score", f"{eval_data['score']}%")
-                table.update_cell(row_key, "TPS", str(metrics.get("tps", 0)))
-                table.update_cell(row_key, "Latency", f"{metrics.get('duration', 0)}s")
-                table.update_cell(row_key, "Status", "✅" if eval_data['score'] >= 80 else "⚠️")
-        
-        # Nach Abschluss: In Historie speichern für Dashboard
-        self.save_to_history()
-    
-    def on_data_table_row_selected(self, event: DataTable.RowSelected):
-        """Öffnet die Detail-Ansicht für die gewählte Zeile."""
-        row_index = event.cursor_row
-        if row_index < len(self.results_data):
-            self.app.push_screen(DetailModal(self.results_data[row_index]))
-
-    def save_to_history(self):
-        # Logik zum Speichern in history.json (für Dashboard "Recent")
-        pass
-
-class DetailModal(Screen):
-    """Ein Pop-up Fenster für die Antwort-Details."""
-    def compose(self) -> ComposeResult:
-        res = self.result_data # Übergeben beim Push
-        with Container(id="modal-container"):
-            yield Label(f"DETAILS: {res['id']}", classes="panel-title-text")
-            yield Static(f"[b]Prompt:[/b]\n{res['prompt']}\n", classes="modal-text")
-            yield Static(f"[b]Response:[/b]\n{res['response']}", classes="modal-text", expand=True)
-            yield Button("Schließen", variant="primary", id="close-modal")
-
-    def __init__(self, result_data):
-        super().__init__()
-        self.result_data = result_data
-
-    def on_button_pressed(self):
-        self.app.pop_screen()
 
 # --- MAIN APP ---
 
@@ -313,6 +377,14 @@ class EvaluationApp(App):
     #modal-container { background: #1e1e1e; border: thick #28d483; padding: 2; margin: 4 10; height: auto; }
     .modal-text { margin-bottom: 1; color: #cccccc; }
     #hint-text { color: #888888; text-align: center; margin-top: 1; }
+
+    #modal-container { background: #1e1e1e; border: thick #28d483; margin: 2 8; padding: 1 2; height: 80%; }
+    .modal-text-box { background: #2d2d2d; padding: 1; border: solid #3f3f3f; margin-bottom: 1; color: #cccccc; }
+    .modal-text-area { height: 12; border: solid #3f3f3f; background: #1a1a1a; color: #28d483; }
+    #run-status-hint { color: #28d483; text-align: right; text-style: italic; }
+
+    SelectionList { height: 5; border: solid #3f3f3f; background: #1e1e1e; margin-bottom: 1; }
+    .button-bar { margin-top: 1; height: 3; align: center middle; }
 
     #run-info { background: $accent; color: white; padding: 1; margin-bottom: 1; }
     DataTable { height: 1fr; border: solid #3f3f3f; }
