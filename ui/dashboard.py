@@ -204,19 +204,23 @@ class WelcomeScreen(Screen):
         self.app.push_screen(DatasetScreen())
 
 class ResultScreen(Screen):
-    """Die Seite mit der Live-Tabelle."""
-    BINDINGS = [("escape", "app.pop_screen", "Zurück zum Dashboard")]
+    """Die Seite mit der Live-Tabelle im einheitlichen Design."""
+    BINDINGS = [
+        ("escape", "app.pop_screen", "Zurück"),
+        ("s", "save_report", "Report speichern")
+    ]
 
     def __init__(self, choices):
         super().__init__()
         self.choices = choices
+        self.results_data = []
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Container(
-            Static(f"RUNNING: [bold cyan]{self.choices['model']}[/]", id="run-info"),
-            DataTable(id="results-table"),
-        )
+        with Container(classes="main-container"):
+            yield Label(f"RUNNING EVALUATION: {self.choices['model']}", classes="panel-title-text")
+            yield DataTable(id="results-table")
+            yield Static("Drücke [b]Enter[/b] auf einer Zeile für Details", id="hint-text")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -240,10 +244,48 @@ class ResultScreen(Screen):
                 eval_data = score_response(result.get("response", ""), item.get("expected_keywords", []))
                 metrics = result.get("metrics", {})
 
+                # Daten für Detail-View speichern
+                self.results_data.append({
+                    "id": item['id'],
+                    "prompt": item['prompt'],
+                    "response": result.get("response", ""),
+                    "score": eval_data['score']
+                })
+
                 table.update_cell(row_key, "Score", f"{eval_data['score']}%")
                 table.update_cell(row_key, "TPS", str(metrics.get("tps", 0)))
                 table.update_cell(row_key, "Latency", f"{metrics.get('duration', 0)}s")
                 table.update_cell(row_key, "Status", "✅" if eval_data['score'] >= 80 else "⚠️")
+        
+        # Nach Abschluss: In Historie speichern für Dashboard
+        self.save_to_history()
+    
+    def on_data_table_row_selected(self, event: DataTable.RowSelected):
+        """Öffnet die Detail-Ansicht für die gewählte Zeile."""
+        row_index = event.cursor_row
+        if row_index < len(self.results_data):
+            self.app.push_screen(DetailModal(self.results_data[row_index]))
+
+    def save_to_history(self):
+        # Logik zum Speichern in history.json (für Dashboard "Recent")
+        pass
+
+class DetailModal(Screen):
+    """Ein Pop-up Fenster für die Antwort-Details."""
+    def compose(self) -> ComposeResult:
+        res = self.result_data # Übergeben beim Push
+        with Container(id="modal-container"):
+            yield Label(f"DETAILS: {res['id']}", classes="panel-title-text")
+            yield Static(f"[b]Prompt:[/b]\n{res['prompt']}\n", classes="modal-text")
+            yield Static(f"[b]Response:[/b]\n{res['response']}", classes="modal-text", expand=True)
+            yield Button("Schließen", variant="primary", id="close-modal")
+
+    def __init__(self, result_data):
+        super().__init__()
+        self.result_data = result_data
+
+    def on_button_pressed(self):
+        self.app.pop_screen()
 
 # --- MAIN APP ---
 
@@ -267,6 +309,10 @@ class EvaluationApp(App):
     .button-bar { height: 3; align: center middle; column-span: 2; }
     #model-container, #dataset-container, #config-container { padding: 2; background: #2d2d2d; margin: 2; border: tall #3f3f3f; }
     #model-title, #dataset-title, #config-title { color: #28d483; text-style: bold; margin-bottom: 1; }
+
+    #modal-container { background: #1e1e1e; border: thick #28d483; padding: 2; margin: 4 10; height: auto; }
+    .modal-text { margin-bottom: 1; color: #cccccc; }
+    #hint-text { color: #888888; text-align: center; margin-top: 1; }
 
     #run-info { background: $accent; color: white; padding: 1; margin-bottom: 1; }
     DataTable { height: 1fr; border: solid #3f3f3f; }
