@@ -1,15 +1,9 @@
 import os
 import subprocess
-import json
 from textual.screen import Screen
 from textual.widgets import Header, Footer, SelectionList, Label, Button
 from textual.widgets.selection_list import Selection
 from textual.containers import Container, Horizontal
-from textual import work
-
-from adapters.ollama import OllamaAdapter
-from core.scoring import score_response
-from core.history_manager import save_run
 
 class LauncherScreen(Screen):
     BINDINGS = [("escape", "app.pop_screen", "Abbrechen")]
@@ -54,61 +48,40 @@ class LauncherScreen(Screen):
                     d_list.add_option(Selection(f, f))
 
     def on_button_pressed(self, event):
-        if event.button.id == "start-btn":
-            models = self.query_one("#select-model").selected
-            datasets = self.query_one("#select-datasets").selected
-            
-            from ui.results import ResultArchiveScreen
-            
-            if models and datasets:
-                model_name = models[0]
-                dataset_names = ", ".join(datasets)
-                for screen in self.app.screen_stack:
-                    if isinstance(screen, ResultArchiveScreen):
-                        screen.show_loading_state()
-                        break
-                self.run_benchmark(models[0], datasets)
-                self.app.notify(
-                    f"Test von: {dataset_names}", 
-                    title=f"Benchmark mit {model_name} gestartet",
-                    timeout=10
-                )
-                self.app.pop_screen()
-        else:
+        if event.button.id == "cancel-btn":
             self.app.pop_screen()
+            return
 
-    @work(exclusive=True, thread=True)
-    def run_benchmark(self, model, datasets):
-        adapter = OllamaAdapter(model)
-        all_results = []
-
-        for ds_name in datasets:
-            ds_path = os.path.join("datasets", ds_name)
-            with open(ds_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            
-            for item in data:
-                res = adapter.send(item['prompt'])
-                eval_data = score_response(res.get("response", ""), item.get("expected_keywords", []))
-                
-                all_results.append({
-                    "id": item.get('id', 'unknown'),
-                    "prompt": item['prompt'],
-                    "response": res.get("response", ""),
-                    "score": eval_data.get('score', 0),
-                    "metrics": res.get("metrics", {})
-                })
-
-        save_run(model, datasets, all_results)
+        if event.button.id != "start-btn":
+            return
         
-        self.app.call_from_thread(self.finalize_run)
+        models = self.query_one("#select-model").selected
+        datasets = self.query_one("#select-datasets").selected
+        
+        if not models or not datasets:
+            self.app.notify("Bitte Modell und Dataset auswählen.", severity="warning")
+            return
+        
+        model_name = models[0]
+        dataset_names = ", ".join(datasets)
 
-    def finalize_run(self):
-        self.app.notify("Benchmark abgeschlossen und gespeichert!", title="Erfolg")
-        if self.callback:
-            self.callback()
-        try:
-            indicator = self.app.query_one("#active-run-indicator")
-            indicator.styles.display = "none"
-        except:
-            pass
+        from ui.results import ResultArchiveScreen
+
+        for screen in self.app.screen_stack:
+            if isinstance(screen, ResultArchiveScreen):
+                screen.show_loading_state()
+                break
+
+        from ui.results import ResultArchiveScreen
+        for screen in self.app.screen_stack:
+            if isinstance(screen, ResultArchiveScreen):
+                screen.run_benchmark(model_name, datasets)
+                break
+
+        self.app.notify(
+            f"Test von: {dataset_names}", 
+            title=f"Benchmark mit {model_name} gestartet", 
+            severity="warning"
+        )
+
+        self.app.pop_screen()

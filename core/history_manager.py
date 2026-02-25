@@ -21,7 +21,7 @@ def save_run(model, datasets, results_data):
     
     new_run = {
         "id": datetime.now().strftime("%Y%m%d_%H%M%S"),
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "timestamp": datetime.now().strftime("%H:%M - %d.%m.%y"),
         "model": model,
         "datasets": datasets,
         "avg_score": avg_score,
