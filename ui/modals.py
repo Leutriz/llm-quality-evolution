@@ -16,9 +16,21 @@ class RunDetailModal(ModalScreen):
 
     def on_mount(self):
         table = self.query_one("#detail-table")
-        table.add_columns("ID", "Score", "Prompt-Vorschau")
+        table.add_columns(
+            "ID", "Score", "Status", "Duration(s)", "Tokens", "TPS", "RespLen", "Prompt-Vorschau"
+        )
         for d in self.run_data["details"]:
-            table.add_row(d["id"], f"{d['score']}%", d["prompt"][:50] + "...")
+            m = d.get("metrics", {})
+            table.add_row(
+                d["id"],
+                f"{d['score']}%",
+                d.get("status", "⚠️"),
+                f"{round(m.get('duration',0),1)}",
+                f"{m.get('token_count',0)}",
+                f"{round(m.get('tps',0),1)}",
+                f"{m.get('response_length',0)}",
+                d["prompt"][:50] + "..."
+            )
 
     def on_button_pressed(self):
         self.app.pop_screen()

@@ -66,15 +66,9 @@ class LauncherScreen(Screen):
         dataset_names = ", ".join(datasets)
 
         from ui.results import ResultArchiveScreen
-
         for screen in self.app.screen_stack:
             if isinstance(screen, ResultArchiveScreen):
                 screen.show_loading_state()
-                break
-
-        from ui.results import ResultArchiveScreen
-        for screen in self.app.screen_stack:
-            if isinstance(screen, ResultArchiveScreen):
                 screen.run_benchmark(model_name, datasets)
                 break
 
